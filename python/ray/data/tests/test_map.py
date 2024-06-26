@@ -23,6 +23,15 @@ from ray.data.tests.test_util import ConcurrencyCounter  # noqa
 from ray.data.tests.util import column_udf, column_udf_class, extract_values
 from ray.tests.conftest import *  # noqa
 
+enable_adaptive_configs = [True, False]
+
+
+@pytest.fixture(params=enable_adaptive_configs, autouse=True, scope="session")
+def context_setup(request):
+    DataContext.get_current().enable_adaptive_execute = request.param
+    yield
+    pass
+
 
 def test_basic_actors(shutdown_only):
     ray.init(num_cpus=6)
@@ -649,7 +658,7 @@ def test_map_batches_extra_args(shutdown_only, tmp_path):
 def test_map_with_memory_resources(shutdown_only):
     """Test that we can use memory resource to limit the concurrency."""
     num_blocks = 50
-    memory_per_task = 100 * 1024**2
+    memory_per_task = 100 * 1024 ** 2
     max_concurrency = 5
     ray.init(num_cpus=num_blocks, _memory=memory_per_task * max_concurrency)
 

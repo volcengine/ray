@@ -1,9 +1,11 @@
 from abc import ABC, abstractmethod
-from typing import Any, Callable, Dict, Iterator, List, Optional, Union
+from concurrent.futures import Future
+from typing import Any, Callable, Dict, Iterator, List, Optional, Tuple, Union
 
 import ray
 from .ref_bundle import RefBundle
 from ray._raylet import ObjectRefGenerator
+from ray.actor import ActorHandle
 from ray.data._internal.execution.autoscaler.autoscaling_actor_pool import (
     AutoscalingActorPool,
 )
@@ -17,7 +19,7 @@ from ray.data._internal.stats import StatsDict
 from ray.data.context import DataContext
 
 # TODO(hchen): Ray Core should have a common interface for these two types.
-Waitable = Union[ray.ObjectRef, ObjectRefGenerator]
+Waitable = Union[Future, ray.ObjectRef, ObjectRefGenerator]
 
 
 class OpTask(ABC):
@@ -102,6 +104,63 @@ class DataOpTask(OpTask):
                     assert False, "Above ray.get should raise an exception."
                 except Exception as ex:
                     self._task_done_callback(ex)
+                    raise ex from None
+            self._output_ready_callback(
+                RefBundle([(block_ref, meta)], owns_blocks=True)
+            )
+            bytes_read += meta.size_bytes
+        return bytes_read
+
+
+class DataFutureOpTask(OpTask):
+    def __init__(
+        self,
+        task_index: int,
+        streaming_gen_fut: Future[Tuple[ActorHandle, ObjectRefGenerator]],
+        output_ready_callback: Callable[[RefBundle], None],
+        task_done_callback: Callable[[ActorHandle, Optional[Exception]], None],
+    ):
+        super().__init__(task_index)
+        self._streaming_gen_fut = streaming_gen_fut
+        self._output_ready_callback = output_ready_callback
+        self._task_done_callback = task_done_callback
+
+    def get_waitable(self) -> Waitable:
+        return self._streaming_gen_fut
+
+    def on_data_ready(self, max_bytes_to_read: Optional[int]) -> int:
+        bytes_read = 0
+        assert (
+            self._streaming_gen_fut.done() and not self._streaming_gen_fut.cancelled()
+        )
+
+        actor, streaming_gen = self._streaming_gen_fut.result()
+
+        while max_bytes_to_read is None or bytes_read < max_bytes_to_read:
+            try:
+                block_ref = streaming_gen._next_sync(0)
+                if block_ref.is_nil():
+                    # The generator currently doesn't have new output.
+                    # And it's not stopped yet.
+                    break
+            except StopIteration:
+                self._task_done_callback(actor, None)
+                break
+
+            try:
+                meta = ray.get(next(streaming_gen))
+            except StopIteration:
+                # The generator should always yield 2 values (block and metadata)
+                # each time. If we get a StopIteration here, it means an error
+                # happened in the task.
+                # And in this case, the block_ref is the exception object.
+                # TODO(hchen): Ray Core should have a better interface for
+                # detecting and obtaining the exception.
+                try:
+                    ray.get(block_ref)
+                    assert False, "Above ray.get should raise an exception."
+                except Exception as ex:
+                    self._task_done_callback(actor, ex)
                     raise ex from None
             self._output_ready_callback(
                 RefBundle([(block_ref, meta)], owns_blocks=True)

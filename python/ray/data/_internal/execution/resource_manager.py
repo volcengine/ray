@@ -411,9 +411,14 @@ class ReservationOpResourceAllocator(OpResourceAllocator):
             # 2. To ensure that all GPUs are utilized, reserve enough resource budget
             # to launch one task for each worker.
             if op.base_resource_usage().gpu > 0:
-                min_workers = sum(
-                    pool.min_size() for pool in op.get_autoscaling_actor_pools()
-                )
+                from ray.data._internal.execution.v2.operators.adaptive_actor_pool_map_operator import \
+                    AdaptiveMapOperator
+                if isinstance(op, AdaptiveMapOperator):
+                    min_workers = op.min_pool_size()
+                else:
+                    min_workers = sum(
+                        pool.min_size() for pool in op.get_autoscaling_actor_pools()
+                    )
                 min_reserved.object_store_memory *= min_workers
             # Also include `reserved_for_op_outputs`.
             min_reserved.object_store_memory += self._reserved_for_op_outputs[op]

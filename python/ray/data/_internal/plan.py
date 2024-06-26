@@ -21,14 +21,11 @@ from ray.data.exceptions import omit_traceback_stdout
 from ray.util.debug import log_once
 
 if TYPE_CHECKING:
-
     from ray.data._internal.execution.interfaces import Executor
     from ray.data.dataset import Dataset
 
-
 # Scheduling strategy can be inherited from prev operator if not specified.
 INHERITABLE_REMOTE_ARGS = ["scheduling_strategy"]
-
 
 logger = logging.getLogger(__name__)
 
@@ -415,11 +412,25 @@ class ExecutionPlan:
         from ray.data._internal.execution.legacy_compat import (
             execute_to_legacy_bundle_iterator,
         )
-        from ray.data._internal.execution.streaming_executor import StreamingExecutor
 
         metrics_tag = create_dataset_tag(self._dataset_name, self._dataset_uuid)
-        executor = StreamingExecutor(copy.deepcopy(ctx.execution_options), metrics_tag)
-        bundle_iter = execute_to_legacy_bundle_iterator(executor, self)
+
+        if DataContext.get_current().enable_adaptive_execute:
+            from ray.data._internal.execution.v2.adaptive_streaming_executor import (
+                AdaptiveStreamingExecutor,
+            )
+
+            executor = AdaptiveStreamingExecutor(
+                copy.deepcopy(ctx.execution_options), metrics_tag
+            )
+
+        else:
+            from ray.data._internal.execution.streaming_executor import StreamingExecutor
+            executor = StreamingExecutor(copy.deepcopy(ctx.execution_options), metrics_tag)
+        bundle_iter = execute_to_legacy_bundle_iterator(
+            executor,
+            self
+        )
         # Since the generator doesn't run any code until we try to fetch the first
         # value, force execution of one bundle before we call get_stats().
         gen = iter(bundle_iter)
@@ -489,10 +500,24 @@ class ExecutionPlan:
                 )
 
                 metrics_tag = create_dataset_tag(self._dataset_name, self._dataset_uuid)
-                executor = StreamingExecutor(
-                    copy.deepcopy(context.execution_options),
-                    metrics_tag,
-                )
+                if DataContext.get_current().enable_adaptive_execute:
+                    from ray.data._internal.execution.v2.adaptive_streaming_executor import (
+                        AdaptiveStreamingExecutor,
+                    )
+
+                    executor = AdaptiveStreamingExecutor(
+                        copy.deepcopy(context.execution_options),
+                        metrics_tag,
+                    )
+                else:
+                    from ray.data._internal.execution.streaming_executor import (
+                        StreamingExecutor,
+                    )
+
+                    executor = StreamingExecutor(
+                        copy.deepcopy(context.execution_options),
+                        metrics_tag,
+                    )
                 blocks = execute_to_legacy_block_list(
                     executor,
                     self,

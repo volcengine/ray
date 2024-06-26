@@ -15,7 +15,6 @@ if TYPE_CHECKING:
 _default_context: "Optional[DataContext]" = None
 _context_lock = threading.Lock()
 
-
 # We chose 128MiB for default: With streaming execution and num_cpus many concurrent
 # tasks, the memory footprint will be about 2 * num_cpus * target_max_block_size ~= RAM
 # * DEFAULT_OBJECT_STORE_MEMORY_LIMIT_FRACTION * 0.3 (default object store memory
@@ -86,7 +85,6 @@ DEFAULT_ENABLE_PROGRESS_BARS = not bool(
 
 DEFAULT_ENABLE_GET_OBJECT_LOCATIONS_FOR_METRICS = False
 
-
 DEFAULT_WRITE_FILE_RETRY_ON_ERRORS = (
     "AWS Error INTERNAL_FAILURE",
     "AWS Error NETWORK_CONNECTION",
@@ -140,6 +138,10 @@ DEFAULT_S3_TRY_CREATE_DIR = False
 DEFAULT_WAIT_FOR_MIN_ACTORS_S = env_integer(
     "RAY_DATA_DEFAULT_WAIT_FOR_MIN_ACTORS_S", 60 * 10
 )
+
+DEFAULT_ACTOR_KILL_TIMEOUT_SECONDS = 60
+
+DEFAULT_TASK_BACKLOG_TIMEOUT_SECONDS = 1.0
 
 
 def _execution_options_factory() -> "ExecutionOptions":
@@ -239,9 +241,14 @@ class DataContext:
             call is made with a S3 URI.
         wait_for_min_actors_s: The default time to wait for minimum requested
             actors to start before raising a timeout, in seconds.
+<<<<<<< HEAD
         retried_io_errors: A list of substrings of error messages that should
             trigger a retry when reading or writing files. This is useful for handling
             transient errors when reading from remote storage systems.
+=======
+        actor_kill_timeout_secs: The length of time actor must be idle before it is removed.
+        task_backlog_timeout_secs: The length of time pendting tasks must be backlogged before new actors are requested.
+>>>>>>> 988320623b (Add the adaptive parallism tune for individual operators of physical DAG)
     """
 
     target_max_block_size: int = DEFAULT_TARGET_MAX_BLOCK_SIZE
@@ -289,6 +296,9 @@ class DataContext:
     s3_try_create_dir: bool = DEFAULT_S3_TRY_CREATE_DIR
     wait_for_min_actors_s: int = DEFAULT_WAIT_FOR_MIN_ACTORS_S
     retried_io_errors: List[str] = DEFAULT_RETRIED_IO_ERRORS
+    actor_kill_timeout_secs: int = DEFAULT_ACTOR_KILL_TIMEOUT_SECONDS
+    task_backlog_timeout_secs: float = DEFAULT_TASK_BACKLOG_TIMEOUT_SECONDS
+    enable_adaptive_execute: bool = False
 
     def __post_init__(self):
         # The additonal ray remote args that should be added to
@@ -307,8 +317,8 @@ class DataContext:
 
     def __setattr__(self, name: str, value: Any) -> None:
         if (
-            name == "write_file_retry_on_errors"
-            and value != DEFAULT_WRITE_FILE_RETRY_ON_ERRORS
+                name == "write_file_retry_on_errors"
+                and value != DEFAULT_WRITE_FILE_RETRY_ON_ERRORS
         ):
             warnings.warn(
                 "`write_file_retry_on_errors` is deprecated. Configure "

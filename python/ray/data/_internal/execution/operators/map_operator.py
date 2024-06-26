@@ -1,12 +1,12 @@
 import copy
 import functools
 import itertools
+import logging
 from abc import ABC, abstractmethod
 from collections import defaultdict, deque
 from typing import Any, Callable, Deque, Dict, Iterator, List, Optional, Set, Union
 
 import ray
-from ray import ObjectRef
 from ray._raylet import ObjectRefGenerator
 from ray.data._internal.compute import (
     ActorPoolStrategy,
@@ -35,6 +35,7 @@ from ray.data._internal.execution.operators.map_transformer import (
 from ray.data._internal.stats import StatsDict
 from ray.data.block import Block, BlockAccessor, BlockExecStats, BlockMetadata
 from ray.data.context import DataContext
+from ray.types import ObjectRef
 from ray.util.scheduling_strategies import NodeAffinitySchedulingStrategy
 
 
@@ -167,21 +168,37 @@ class MapOperator(OneToOneOperator, ABC):
                 ray_remote_args=ray_remote_args,
             )
         elif isinstance(compute_strategy, ActorPoolStrategy):
-            from ray.data._internal.execution.operators.actor_pool_map_operator import (
-                ActorPoolMapOperator,
-            )
+            if DataContext.get_current().enable_adaptive_execute:
+                from ray.data._internal.execution.v2.operators.adaptive_actor_pool_map_operator import (
+                    AdaptiveMapOperator,
+                )
 
-            return ActorPoolMapOperator(
-                map_transformer,
-                input_op,
-                target_max_block_size=target_max_block_size,
-                compute_strategy=compute_strategy,
-                name=name,
-                min_rows_per_bundle=min_rows_per_bundle,
-                supports_fusion=supports_fusion,
-                ray_remote_args_fn=ray_remote_args_fn,
-                ray_remote_args=ray_remote_args,
-            )
+                return AdaptiveMapOperator(
+                    map_transformer,
+                    input_op,
+                    target_max_block_size=target_max_block_size,
+                    compute_strategy=compute_strategy,
+                    name=name,
+                    min_rows_per_bundle=min_rows_per_bundle,
+                    supports_fusion=supports_fusion,
+                    ray_remote_args_fn=ray_remote_args_fn,
+                    ray_remote_args=ray_remote_args,
+                )
+            else:
+                from ray.data._internal.execution.operators.actor_pool_map_operator import (
+                    ActorPoolMapOperator,
+                )
+                return ActorPoolMapOperator(
+                    map_transformer,
+                    input_op,
+                    target_max_block_size=target_max_block_size,
+                    compute_strategy=compute_strategy,
+                    name=name,
+                    min_rows_per_bundle=min_rows_per_bundle,
+                    supports_fusion=supports_fusion,
+                    ray_remote_args_fn=ray_remote_args_fn,
+                    ray_remote_args=ray_remote_args,
+                )
         else:
             raise ValueError(f"Unsupported execution strategy {compute_strategy}")
 
@@ -288,13 +305,12 @@ class MapOperator(OneToOneOperator, ABC):
         """
         raise NotImplementedError
 
-    def _submit_data_task(
+    def _generate_data_task(
         self,
         gen: ObjectRefGenerator,
         inputs: RefBundle,
         task_done_callback: Optional[Callable[[], None]] = None,
     ):
-        """Submit a new data-handling task."""
         # TODO(hchen):
         # 1. Move this to the base PhyscialOperator class.
         # 2. This method should only take a block-processing function as input,
@@ -336,12 +352,23 @@ class MapOperator(OneToOneOperator, ABC):
             if task_done_callback:
                 task_done_callback()
 
-        self._data_tasks[task_index] = DataOpTask(
+        return DataOpTask(
             task_index,
             gen,
             lambda output: _output_ready_callback(task_index, output),
             functools.partial(_task_done_callback, task_index),
         )
+
+    def _submit_data_task(
+        self,
+        gen: ObjectRefGenerator,
+        inputs: RefBundle,
+        task_done_callback: Optional[Callable[[], None]] = None,
+    ):
+        """Submit a new data-handling task."""
+        data_task = self._generate_data_task(gen, inputs, task_done_callback)
+        task_index = data_task.task_index()
+        self._data_tasks[task_index] = data_task
 
     def _submit_metadata_task(
         self, result_ref: ObjectRef, task_done_callback: Callable[[], None]

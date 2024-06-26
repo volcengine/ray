@@ -505,8 +505,8 @@ def select_operator_to_run(
     topology: Topology,
     resource_manager: ResourceManager,
     backpressure_policies: List[BackpressurePolicy],
-    autoscaler: Autoscaler,
-    ensure_at_least_one_running: bool,
+    autoscaler: Optional[Autoscaler] = None,
+    ensure_at_least_one_running: bool = True,
 ) -> Optional[PhysicalOperator]:
     """Select an operator to run, if possible.
 
@@ -534,12 +534,7 @@ def select_operator_to_run(
             not p.can_add_input(op) for p in backpressure_policies
         )
         op_runnable = False
-        if (
-            not in_backpressure
-            and not op.completed()
-            and state.num_queued() > 0
-            and op.should_add_input()
-        ):
+        if not in_backpressure and not op.completed() and state.num_queued() > 0:
             ops.append(op)
             op_runnable = True
         # Update scheduling status
@@ -548,12 +543,12 @@ def select_operator_to_run(
             runnable=op_runnable,
             under_resource_limits=under_resource_limits,
         )
-
         # Signal whether op in backpressure for stats collections
         op.notify_in_task_submission_backpressure(in_backpressure)
 
     # To ensure liveness, allow at least 1 op to run regardless of limits. This is
     # gated on `ensure_at_least_one_running`, which is set if the consumer is blocked.
+
     if (
         ensure_at_least_one_running
         and not ops
@@ -563,7 +558,7 @@ def select_operator_to_run(
         ops = [
             op
             for op, state in topology.items()
-            if state.num_queued() > 0 and not op.completed()
+            if state.num_queued() > 0 and not op.completed() and op.should_add_input()
         ]
 
     selected_op = None
@@ -578,7 +573,17 @@ def select_operator_to_run(
             ),
         )
         topology[selected_op]._scheduling_status.selected = True
-    autoscaler.try_trigger_scaling()
+    if autoscaler is not None:
+        autoscaler.try_trigger_scaling()
+    """
+    for op, state in topology.items():
+        if selected_op:
+            logger.info(
+                f"select {op.name}, {state.num_queued()}, {op.should_add_input()}, output {len(state.outqueue)}, selected {selected_op.name}")
+        else:
+            logger.info(
+                f"select {op.name}, {state.num_queued()}, {op.should_add_input()}, output {len(state.outqueue)}, selected {selected_op}")
+    """
     return selected_op
 
 

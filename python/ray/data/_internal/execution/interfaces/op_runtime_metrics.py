@@ -352,7 +352,13 @@ class OpRuntimeMetrics:
         )
 
         num_tasks_running = self.num_tasks_running
-        if isinstance(self._op, ActorPoolMapOperator):
+        from ray.data._internal.execution.v2.operators.adaptive_actor_pool_map_operator import (
+            AdaptiveMapOperator,
+        )
+
+        if isinstance(self._op, ActorPoolMapOperator) and not isinstance(
+            self._op, AdaptiveMapOperator
+        ):
             num_tasks_running = min(
                 num_tasks_running, self._op._actor_pool.num_active_actors()
             )
