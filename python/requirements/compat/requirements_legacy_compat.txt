@@ -18,7 +18,7 @@ keras==2.7.0
 # Torch addons
 torchvision==0.10.0
 
-pytorch-lightning==1.5.10
+pytorch-lightning==2.4.0
 
 # Datasets
 pyarrow==6.0.1
